@@ -53,49 +53,4 @@ def download_all():
         download(name)
 
 
-def all_cpu_devices() -> list[torch.device]:
-    return [torch.device('cpu')]
 
-
-def all_gpu_devices() -> list[torch.device]:
-    device_list = []
-
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            device_list.append(torch.device(f'cuda:{i}'))
-    return device_list
-
-
-def all_mps_devices() -> list[torch.device]:
-    device_list = []
-    # As of now, the MPS backend supports only a single device. Therefore, there
-    # should be only one MPS device.
-    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device_list.append(torch.device('mps'))
-
-    return device_list
-
-
-def devices(device_name: str = None) -> list[torch.device]:
-    # First priority, we should find all cuda devices,
-    # Second priority, we should find all mps devices,
-    # Finally, we fall back to cpu.
-
-    device_func_map = {'cpu': all_cpu_devices, 'cuda': all_gpu_devices, 'mps': all_mps_devices}
-
-    if device_name:
-        # "device name must be in ['cpu', 'cuda', 'mps']."
-        assert device_name in device_func_map.keys()
-        return device_func_map[device_name]()
-
-    # Find all cuda devices
-    cuda_devices = device_func_map['cuda']()
-    if cuda_devices:
-        return cuda_devices
-
-    # Find all mps devices
-    mps_devices = device_func_map['mps']()
-    if mps_devices:
-        return mps_devices
-
-    return device_func_map['cpu']()
