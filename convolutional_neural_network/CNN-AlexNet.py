@@ -72,8 +72,9 @@ def test(model, loss, device, test_iter):
 
 
 def main():
+    #hyper 
+    batch_size, num_epochs, lr  = 128, 10, 0.01
     # Dataloader
-    batch_size, num_epochs, lr  = 256, 20, 0.9
     trans = [transforms.ToTensor()]
     trans.insert(0, transforms.Resize(size=224))
     trans = transforms.Compose(trans)
