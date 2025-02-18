@@ -1,4 +1,9 @@
 #! coding: utf-8
+
+'''
+多个vgg_block + 全连接层
+block 的使用，有效的设计复杂的网络
+'''
 import sys
 sys.path.append('../')
 import torch

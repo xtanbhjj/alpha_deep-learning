@@ -1,4 +1,11 @@
 #! coding: utf-8
+
+'''
+AlexNet 更深 
+sigmoid -> ReLU
+avgpool -> maxpool
+dropout: 控制全连接层的模型复杂度
+'''
 import sys
 sys.path.append('../')
 import torch

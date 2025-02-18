@@ -1,4 +1,9 @@
 #! coding: utf-8
+
+'''
+NiN 取消了全连接层
+用1*1的卷积层来代替,相当于是channel中对应像素点进行一个全连接层
+'''
 import sys
 sys.path.append('../')
 import torch
@@ -43,7 +48,7 @@ class NiN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-def accuracy(x, y): #计算预测正确的数目
+def accuracy(x, y): 
     if len(x.shape) == 2 and x.shape[1] == 10:
         x = x.argmax(axis=1)
     cmp = x.type(y.dtype) == y
