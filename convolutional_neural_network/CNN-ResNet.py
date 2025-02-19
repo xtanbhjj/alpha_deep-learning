@@ -126,6 +126,14 @@ def main():
     mnist_test = torchvision.datasets.FashionMNIST(root='../data', train=False, transform=trans, download=True)
     train_iter = DataLoader(mnist_train, batch_size=batch_size, shuffle=True)
     test_iter = DataLoader(mnist_test, batch_size=batch_size, shuffle=False)
+
+    flag = True
+    for x, y in train_iter:
+        if flag:
+            print(x.shape, y.shape)
+            flag = False
+        else:
+            break
     #model
     loss = nn.CrossEntropyLoss()
     model = ResNet()
