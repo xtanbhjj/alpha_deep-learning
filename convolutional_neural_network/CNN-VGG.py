@@ -50,7 +50,7 @@ class VGG(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-def accuracy(x, y): #计算预测正确的数目
+def accuracy(x, y): 
     if len(x.shape) == 2 and x.shape[1] == 10:
         x = x.argmax(axis=1)
     cmp = x.type(y.dtype) == y
