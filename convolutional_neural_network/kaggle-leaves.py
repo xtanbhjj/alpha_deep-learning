@@ -103,7 +103,7 @@ class LeavesSet(Data.Dataset):
             self.train = False
         
         self.transform = transforms.Compose([
-                transforms.Resize((96,96)),
+                transforms.Resize((224, 224)),
                 transforms.ToTensor()
                 ])
         
@@ -178,7 +178,8 @@ def infer(test_data, test_dataset, model, batch_size, device, labelencoder):
 
 def main():
     #hyper 
-    batch_size, num_epochs, lr, k  = 128, 10, 0.1, 5
+    #batch_size, num_epochs, lr, k  = 128, 10, 0.1, 5    0.83
+    batch_size, num_epochs, lr, k  = 64, 20, 0.05, 5
 
     # Dataloader
     train_data = pd.read_csv('../data/classify-leaves/train.csv')
