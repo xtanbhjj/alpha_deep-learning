@@ -111,7 +111,7 @@ def infer(test_data, test_dataset, model, batch_size, device, labelencoder):
                 [str(num) for num in output]) + '\n')
 
 def main():
-    batch_size, num_epochs, lr, k = 128, 10, 0.005, 2
+    batch_size, num_epochs, lr, k = 128, 20, 0.05, 3
 
     # DataSet
     train_data = pd.read_csv('../data/dog-breed-identification/train.csv')
@@ -125,29 +125,26 @@ def main():
     train_dataSet = DogSet(train_data['id'], train_data['breed'], train=True)
     test_dataSet = DogSet(test_data['id'], images_label=0, train=False)
 
+    loss = nn.CrossEntropyLoss()
     #model
+    '''
     model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
     model.fc = nn.Linear(model.fc.in_features, 120)
-    loss = nn.CrossEntropyLoss()
-
-    '''
-    在微调的时候,我们提取特征的部分可以frozen,也就是说不更新梯度
-
-    model = nn.Sequential()
-    model.features = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
-    model.output = nn.Sequential(nn.Linear(1000, 256), nn.ReLU(), nn.Linear(256, 120))
-    device = dlf.devices()[0]
-    model = model.to(device)
-    for param in model.features.parameters():
-        param.requires_grad = False
-    optimizer = torch.optim.SGD((param for param in model.parameters() if param.requires_grad), lr=lr)
-    '''
-
     extract_para = [param for name, param in model.named_parameters()
                     if name not in ['fc.weight', 'fc.bias']]
     optimizer = torch.optim.SGD([{'params': extract_para},
                                  {'params': model.fc.parameters(), 'lr': lr * 10}],
                                  lr=lr)
+    '''
+    model = nn.Sequential()
+    model.features = torchvision.models.resnet34(weights=torchvision.models.ResNet34_Weights.DEFAULT)
+    model.output = nn.Sequential(nn.Linear(1000, 256), nn.ReLU(), nn.Linear(256, 120))
+    device = dlf.devices()[0]
+    model = model.to(device)
+    for param in model.features.parameters():
+        param.requires_grad = False
+    optimizer = torch.optim.SGD((param for param in model.parameters() if param.requires_grad), lr=lr, weight_decay=5e-4)
+    
     kfold = KFold(n_splits=k, shuffle=True)
 
     #device
