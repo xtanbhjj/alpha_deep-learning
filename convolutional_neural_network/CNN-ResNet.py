@@ -141,6 +141,10 @@ def main():
     #device
     device = dlf.devices()[0]
     model = model.to(device)
+    '''
+    devices = [0, 1, 2, 3]
+    model = nn.DataParallel(model, device_ids=devices)
+    '''
     print(device)
 
     for i in range(num_epochs):

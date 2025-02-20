@@ -102,7 +102,11 @@ class LeavesSet(Data.Dataset):
         else:
             self.train = False
         
-        self.transform = transforms.Compose([
+        self.train_trans = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor()
+                ])
+        self.test_trans = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor()
                 ])
@@ -110,13 +114,13 @@ class LeavesSet(Data.Dataset):
     def __getitem__(self,index):
         image_path = self.imgs[index]
         pil_img = Image.open(image_path)
-        transform = self.transform
-        data = transform(pil_img)
 
         if self.train:
+            data = self.train_trans(pil_img)
             label = self.labels[index]
             return data, label
         else:
+            data = self.test_trans(pil_img) 
             return data 
     
     def __len__(self):
@@ -223,6 +227,10 @@ def main():
     #device
     device = dlf.devices()[0]
     model = model.to(device)
+    '''
+    devices = [0, 1, 2, 3]
+    model = nn.DataParallel(model, device_ids=devices)
+    '''
     print(device)
 
     '''
