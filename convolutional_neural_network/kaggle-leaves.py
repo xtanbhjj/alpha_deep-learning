@@ -12,6 +12,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import KFold
 from torchvision import transforms
 from PIL import Image
+from torchvision.io import read_image
 import pandas as pd
 from utils.accumulator import Accumulator 
 import utils.dlf as dlf
@@ -203,6 +204,7 @@ def main():
 
     train_dataSet = LeavesSet(train_data['image'], train_data['label'], train=True)
     test_dataSet = LeavesSet(test_data['image'], images_label=0, train=False)
+    #print(train_dataSet[0])
 
     #model
     loss = nn.CrossEntropyLoss()
