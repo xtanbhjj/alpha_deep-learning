@@ -134,6 +134,15 @@ def boxes_offset(anchors, assigned_bb, eps=1e-6):
     
     return offset
 
+def offset_inverse(authors, offset_preds):
+    anc = box_corner_to_center(authors)
+    pred_xy = (offset_preds[:, :2] * anc[:, 2:] / 10) + anc[:, :2]
+    pred_wh = torch.exp(offset_preds[:, 2:] / 5) * anc[:, 2:]
+    pred_box = torch.cat((pred_xy, pred_wh), dim=1)
+    predicted_box = box_center_to_corner(pred_box)
+
+    return predicted_box
+
 def multibox_target(anchors, labels):
     batch_size, anchors = labels.shape[0], anchors.squeeze(0)
     batch_offset, batch_mask, batch_class_labels = [], [], []
@@ -161,3 +170,51 @@ def multibox_target(anchors, labels):
     class_labels = torch.stack(batch_class_labels)
 
     return bbox_offset, bbox_mask, class_labels
+
+def nms(boxes, scores, iou_threshold):
+    b = torch.argsort(scores, dim=-1, descending=True)
+    keep = []
+    while b.numel() > 0:
+        i = b[0]
+        keep.append(i)
+
+        if b.numel() == 1:
+            break
+
+        iou = box_iou(boxes[i, :].reshape(-1, 4),
+                      boxes[b[1:], :].reshape(-1, 4).reshape(-1))
+        indices = torch.nonzero(iou <= iou_threshold).reshape(-1)
+        b = b[indices + 1]
+    return torch.tensor(keep, device=boxes.device)
+
+def multibox_detection(cls_probs, offset_preds, anchors, nms_threshold=0.5,
+                       pos_threshold=0.009999999):
+    """使用非极大值抑制来预测边界框"""
+    device, batch_size = cls_probs.device, cls_probs.shape[0]
+    anchors = anchors.squeeze(0)
+    num_classes, num_anchors = cls_probs.shape[1], cls_probs.shape[2]
+    out = []
+    for i in range(batch_size):
+        cls_prob, offset_pred = cls_probs[i], offset_preds[i].reshape(-1, 4)
+        conf, class_id = torch.max(cls_prob[1:], 0)
+        predicted_bb = offset_inverse(anchors, offset_pred)
+        keep = nms(predicted_bb, conf, nms_threshold)
+
+        # 找到所有的non_keep索引，并将类设置为背景
+        all_idx = torch.arange(num_anchors, dtype=torch.long, device=device)
+        combined = torch.cat((keep, all_idx))
+        uniques, counts = combined.unique(return_counts=True)
+        non_keep = uniques[counts == 1]
+        all_id_sorted = torch.cat((keep, non_keep))
+        class_id[non_keep] = -1
+        class_id = class_id[all_id_sorted]
+        conf, predicted_bb = conf[all_id_sorted], predicted_bb[all_id_sorted]
+        # pos_threshold是一个用于非背景预测的阈值
+        below_min_idx = (conf < pos_threshold)
+        class_id[below_min_idx] = -1
+        conf[below_min_idx] = 1 - conf[below_min_idx]
+        pred_info = torch.cat((class_id.unsqueeze(1),
+                               conf.unsqueeze(1),
+                               predicted_bb), dim=1)
+        out.append(pred_info)
+    return torch.stack(out)
