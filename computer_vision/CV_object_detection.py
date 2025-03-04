@@ -15,10 +15,44 @@ from pathlib import Path
 from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from utils.plot import ImageUtils
 from utils.accumulator import Accumulator
+from utils.plot import ImageUtils
 from utils.timer import Timer
 import utils.dlf as dlf
+
+dlf.DATA_HUB['banana-detection'] = (
+    dlf.DATA_URL + 'banana-detection.zip',
+    '5de26c8fce5ccdea9f91267273464dc968d20d72')
+
+def read_data_bananas(is_train=True):
+    data_dir = '../data/banana-detection'
+    csv_fname = os.path.join(data_dir,
+                             'bananas_train' if is_train else 'bananas_val', 'label.csv')
+    csv_data = pd.read_csv(csv_fname)
+    csv_data = csv_data.set_index('img_name')
+
+    images, targets = [], []
+    for img_name, target in csv_data.iterrows():
+        images.append(
+            torchvision.io.read_image(
+                os.path.join(data_dir, 'bananas_train' if is_train else 'bananas_val',
+                             'images', f'{img_name}')))
+        targets.append(list(target))
+    
+    return images, torch.tensor(targets).unsqueeze(1) / 256
+
+class BananasDataset(torch.utils.data.Dataset):
+    # Define a custom bananas dataset. We should override __getitem__ and __len__ methods.
+    def __init__(self, is_train):
+        self.features, self.labels = read_data_bananas(is_train)
+        print('read', str(len(self.features)),
+              (f' training examples' if is_train else f' validation examples'))
+
+    def __getitem__(self, idx):
+        return self.features[idx].float(), self.labels[idx]
+
+    def __len__(self):
+        return len(self.features)
 
 # The transfer of Bounding box
 def box_corner_to_center(boxes):
@@ -84,20 +118,26 @@ def multibox_prior(data, sizes, ratios):
     return output.unsqueeze(0)
 
 # 2. 利用交互比（IoU）给锚框打标签, 并且计算offset
-def box_iou(box1, box2):
-    box_area = lambda box: ((box[:, 2] - box[:, 0] * (box[:, 3] - box[:, 1])))
-    
-    area1 = box_area(box1) #(n_box1, )
-    area2 = box_area(box2) #(n_box2, )
-    
-    # None就是在所处的位置添加一个纬度
-    inter_upper = torch.max(box1[:, None, :2], box2[:, :2]) #(n_box1, n_box2, 2)
-    inter_lower = torch.min(box1[:, None, 2:], box2[:, 2:])
-    inter = (inter_upper - inter_lower).clamp(min=0)
+def box_iou(boxes1, boxes2):
+    print("box1 shape:", boxes1.shape)  
+    print("box2 shape:", boxes2.shape)
+    box_area = lambda boxes: ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))
+    # The shapes of the boxes1, boxes2, areas1 and areas2.
+    # (the number of boxes1, 4)
+    # (the number of boxes2, 4)
+    # (the number of boxes1, )
+    # (the number of boxes2, )
+    areas1 = box_area(boxes1)
+    areas2 = box_area(boxes2)
 
-    inter_areas = inter[:, :, 0] * inter[:, :, 1]
-    union_areas = area1[:, None] + area2 - inter_areas
-
+    # The shapes of the inter_upperlefts, inter_lowerrights, inters
+    # (the number of boxes1, the number of boxes2, 2)
+    inter_upperlefts = torch.max(boxes1[:, None, :2], boxes2[:, :2])
+    inter_lowerrights = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])
+    inters = (inter_lowerrights - inter_upperlefts).clamp(min=0)
+    # The shape of the inter_areasandunion_areas is (the number of boxes1, the number of boxes2)
+    inter_areas = inters[:, :, 0] * inters[:, :, 1]
+    union_areas = areas1[:, None] + areas2 - inter_areas
     return inter_areas / union_areas
 
 def assign_anchor_to_boxes(ground_truth, anchors, device, iou_threshold=0.5):
@@ -182,7 +222,7 @@ def nms(boxes, scores, iou_threshold):
             break
 
         iou = box_iou(boxes[i, :].reshape(-1, 4),
-                      boxes[b[1:], :].reshape(-1, 4).reshape(-1))
+                      boxes[b[1:], :].reshape(-1, 4)).reshape(-1)
         indices = torch.nonzero(iou <= iou_threshold).reshape(-1)
         b = b[indices + 1]
     return torch.tensor(keep, device=boxes.device)
@@ -217,4 +257,209 @@ def multibox_detection(cls_probs, offset_preds, anchors, nms_threshold=0.5,
                                conf.unsqueeze(1),
                                predicted_bb), dim=1)
         out.append(pred_info)
+        
     return torch.stack(out)
+
+class ClassPredictor(nn.Module):
+    def __init__(self, num_inputs, num_anchors, num_classes):
+        super(ClassPredictor, self).__init__()
+        self.net = nn.Conv2d(num_inputs, num_anchors * (num_classes + 1), kernel_size=3, padding=1)
+
+    def forward(self, x):
+        return self.net(x)
+    
+class BBoxPredictor(nn.Module):
+    def __init__(self, num_inputs, num_anchors):
+        super(BBoxPredictor, self).__init__()
+        self.net = nn.Conv2d(num_inputs, num_anchors * 4, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        return self.net(x)
+    
+def flatten_pred(pred):
+    return torch.flatten(pred.permute(0, 2, 3, 1), start_dim=1)
+
+def concat_preds(preds):
+    return torch.cat([flatten_pred(p) for p in preds], dim=1)
+
+class DownSamplingBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DownSamplingBlock, self).__init__()
+        blk = []
+        for _ in range(2):
+            blk.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1))
+            blk.append(nn.BatchNorm2d(out_channels))
+            blk.append(nn.ReLU())
+            in_channels = out_channels
+        blk.append(nn.MaxPool2d(2))
+
+        self.net = nn.Sequential(*blk)
+    
+    def forward(self, x):
+        return self.net(x)
+    
+class BaseNetworkBlock(nn.Module):
+    def __init__(self):
+        super(BaseNetworkBlock, self).__init__()
+        blk = []
+        num_filters = [3, 16, 32, 64]
+        for i in range(len(num_filters) - 1):
+            blk.append(DownSamplingBlock(num_filters[i], num_filters[i + 1]))
+        
+        self.net = nn.Sequential(*blk)
+    
+    def forward(self, x):
+        return self.net(x)
+    
+class TinySSD(nn.Module):
+    def __init__(self, num_classes, sizes, ratios, num_anchors, **kwargs):
+        super(TinySSD, self).__init__(**kwargs)
+        # num_anchors指的是对于每个像素点生成的锚框的个数
+
+        self.num_classes = num_classes
+        self.sizes = sizes
+        self.ratios = ratios
+        idx_to_in_channel = [64, 128, 128, 128, 128]
+
+        for i in range(5):
+            setattr(self, f'blk_{i}', self.get_blk(i))
+            setattr(self, f'cls_{i}', ClassPredictor(idx_to_in_channel[i], num_anchors, num_classes))
+            setattr(self, f'offset_{i}', BBoxPredictor(idx_to_in_channel[i], num_anchors))
+
+    def forward(self, x):
+        default_classes = 5
+        empty_tensor = torch.tensor([])
+        anchors = [empty_tensor] * default_classes
+        cls_preds = [empty_tensor] * default_classes
+        bbox_preds = [empty_tensor] * default_classes
+
+        for i in range(5):
+            x, anchors[i], cls_preds[i], bbox_preds[i] = self.blk_forward(
+                x, getattr(self, f'blk_{i}'), self.sizes[i], self.ratios[i],
+                getattr(self, f'cls_{i}'), getattr(self, f'offset_{i}'))
+            
+        anchors = torch.cat(anchors, dim=1)
+        cls_preds = concat_preds(cls_preds)
+        cls_preds = cls_preds.reshape(
+            cls_preds.shape[0], -1, self.num_classes + 1)
+        bbox_preds = concat_preds(bbox_preds)
+        return anchors, cls_preds, bbox_preds
+    
+    @staticmethod
+    def get_blk(i):
+        blks = [
+            BaseNetworkBlock(),
+            DownSamplingBlock(64, 128),
+            DownSamplingBlock(128, 128),
+            DownSamplingBlock(128, 128),
+            nn.AdaptiveMaxPool2d((1, 1)),
+        ]
+        return blks[i]
+    
+    @staticmethod
+    def blk_forward(x, blk, size, ratio, cls_predictor, bbox_predictor):
+        y = blk(x)
+        anchors = multibox_prior(y, sizes=size, ratios=ratio)
+        cls_preds = cls_predictor(y)
+        bbox_preds = bbox_predictor(y)
+        return y, anchors, cls_preds, bbox_preds
+    
+class ObjectDetectionLossCalc:
+    def __init__(self):
+        self.cls_loss = nn.CrossEntropyLoss(reduction='none')
+        self.bbox_loss = nn.L1Loss(reduction='none')
+    
+    def __call__(self, cls_preds, cls_labels, bbox_preds, bbox_labels, bbox_masks):
+        batch_size, num_classes = cls_preds.shape[0], cls_preds.shape[2]
+        cls = self.cls_loss(cls_preds.reshape(-1, num_classes),
+                            cls_labels.reshape(-1)).reshape(batch_size, -1).mean(dim=1)
+        bbox = self.bbox_loss(bbox_preds * bbox_masks,
+                              bbox_labels * bbox_masks).mean(dim=1)
+        return cls + bbox
+    
+def cls_eval(cls_preds, cls_labels):
+    return float((cls_preds.argmax(dim=-1).type(
+        cls_labels.dtype) == cls_labels).sum())
+
+def bbox_eval(bbox_preds, bbox_labels, bbox_masks):
+    return float((torch.abs((bbox_labels - bbox_preds) * bbox_masks)).sum())
+
+def train(net, optimizer, loss, device, train_iter):
+    net.train()
+    metric = Accumulator(4)
+    for feature, target in train_iter:
+        optimizer.zero_grad()
+        x, y = feature.to(device), target.to(device)
+        anchors, cls_preds, bbox_preds = net(x)
+        bbox_labels, bbox_masks, cls_labels = multibox_target(anchors, y)
+        l = loss(cls_preds, cls_labels, bbox_preds, bbox_labels, bbox_masks)
+        l.mean().backward()
+        optimizer.step()
+
+        metric.add(cls_eval(cls_preds, cls_labels), cls_labels.numel(),
+                   bbox_eval(bbox_preds, bbox_labels, bbox_masks), bbox_labels.numel())
+    
+    cls_err, bbox_mae = 1 - metric[0] / metric[1], metric[2] / metric[3]
+    return cls_err, bbox_mae
+
+def display(img, output, threshold):
+    fig = ImageUtils.imshow(img)
+
+    for row in output:
+        score = float(row[1])
+        if score < threshold:
+            continue
+        h, w = img.shape[0:2]
+        bbox = [row[2:6] * torch.tensor((w, h, w, h), device=row.device)]
+        ImageUtils.show_boxes(fig.axes, bbox, ['%.2f' % score], ['w'])
+def inference(model, device, val_iter):
+    model.eval()
+
+    x = torchvision.io.read_image(os.path.join(str(Path(__file__).resolve().parent),
+                                                   'banana.jpg')).unsqueeze(0).float()
+    img = x.squeeze(0).permute(1, 2, 0).long()
+    anchors, cls_preds, bbox_preds = model(x.to(device))
+    cls_probs = F.softmax(cls_preds, dim=2).permute(0, 2, 1)
+    output = multibox_detection(cls_preds, bbox_preds, anchors)
+    idx = [i for i, row in enumerate(output[0]) if row[0] != -1]
+    output = output[0, idx]
+
+    display(img, output.cpu(), threshold=0.9)
+    plt.show()
+
+def main():
+     # hyperparameters
+    batch_size, learning_rate, num_epochs = 32, 0.2, 20
+    sizes = [[0.2, 0.272], [0.37, 0.447], [0.54, 0.619],
+            [0.71, 0.79], [0.88, 0.961]]
+    ratios = [[1, 2, 0.5]] * 5
+    num_anchors = len(sizes[0]) + len(ratios[0]) - 1
+
+    # dataloader
+    train_iter = torch.utils.data.DataLoader(
+        BananasDataset(is_train=True),
+        batch_size=batch_size, shuffle=True, num_workers=4)
+    val_iter = torch.utils.data.DataLoader(
+        BananasDataset(is_train=False),
+        batch_size=batch_size, shuffle=False, num_workers=4)
+    
+    model = TinySSD(num_classes=1, sizes=sizes, ratios=ratios, num_anchors=num_anchors)
+    device = dlf.devices('cpu')[0]
+    print(device)
+    model = model.to(device)
+    '''
+    devices = [0, 1, 2, 3]
+    model = nn.DataParallel(model, device_ids=devices)
+    '''
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, weight_decay=5e-4)
+    loss = ObjectDetectionLossCalc()
+
+    for epoch in range(num_epochs):
+        cl, bl = train(model, optimizer, loss, device, train_iter)
+        print(f'iter: {epoch+1}, ', f'class error: {cl:.2e}, ', f'bbox mae: {bl:.2e}')
+    
+    inference(model, device, val_iter)
+    
+
+if __name__ == '__main__':
+    main()
