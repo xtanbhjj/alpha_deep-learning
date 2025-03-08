@@ -7,6 +7,7 @@ import os
 import matplotlib.pyplot as plt
 import torchvision
 import torch.nn as nn
+import numpy as np
 import torch.utils.data as Data 
 from torch.utils.data import DataLoader
 import pandas as pd
@@ -75,10 +76,9 @@ class VOCSegDataset(torch.utils.data.Dataset):
                          for feature in self.filter(features)]
         self.labels = self.filter(labels)
         self.colormap2label = voc_colormap2label()
-        print('read ' + str(len(self.features)) + ' examples')
 
     def normalize_image(self, img):
-        return self.transform(img.float() / 255)
+        return self.transform(img.float())
 
     def filter(self, imgs):
         return [img for img in imgs if (
@@ -120,6 +120,7 @@ def train(model, optimizer, loss, device, train_iter):
         l = l.sum()
         l.backward()
         optimizer.step()
+        # sys.exit("successfully")
 
         with torch.no_grad():
             metric.add(l * y.numel(), y.numel())
@@ -140,7 +141,12 @@ def test(model, loss, device, test_iter):
         
     return metric[0] / metric[1]
 
-def inference(model, device, voc_dir, test_iter):
+def tensor_image_show(img):
+    plt.imshow(img.numpy())
+    plt.show()
+    print("图像形状:", img.numpy().shape) 
+
+def inference(model, device, test_iter):
     model.eval()
     with torch.no_grad():
         for x, y in test_iter:
@@ -154,10 +160,8 @@ def inference(model, device, voc_dir, test_iter):
             X = colormap[X, :]
             x = x.squeeze(dim=0)
             x = x.permute(1, 2, 0)
-            plt.imshow(x.numpy())
-            plt.show()
-            plt.imshow(X.numpy())
-            plt.show()
+            tensor_image_show(x)
+            tensor_image_show(X)
             break
 
 def main():
@@ -195,7 +199,7 @@ def main():
         print(train_loss, test_loss)
 
     #inference
-    inference(model, device, voc_dir, test_iter)
+    inference(model, device, test_iter)
 
 
 if __name__ == '__main__':

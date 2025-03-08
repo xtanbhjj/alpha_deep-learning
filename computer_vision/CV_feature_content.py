@@ -24,13 +24,11 @@ import utils.dlf as dlf
 rgb_mean = torch.tensor([0.485, 0.456, 0.406])
 rgb_std = torch.tensor([0.229, 0.224, 0.225])
 style_layers, content_layers = [0, 5, 10, 19, 28], [25]
-content_img = ImageUtils.imread('cat.png')
-style_img= ImageUtils.imread('cartoon.png')
-content_img = content_img[:, :, :3]
+content_img = Image.open('cat.png')
+style_img= Image.open('cartoon.png')
+content_img = content_img.convert('RGB')
 
 def preprocess(img, image_shape):
-    img = (img * 255).astype(np.uint8)  # 将 0-1 的浮点数转换为 0-255 的整数
-    img = Image.fromarray(img)
     transforms = torchvision.transforms.Compose([
         torchvision.transforms.Resize(image_shape),
         torchvision.transforms.ToTensor(),
@@ -121,9 +119,9 @@ def main():
 
     for i in range(num_epochs):
         init_img = train(contents_Y, styles_Y_gram, device, loss, model, optimizer, init_img)
+        #sys.exit("successfully")
     img = postprocess(init_img)
-    fig = ImageUtils.imshow(img)
-    plt.show()
+    img.show()
 
 if __name__ == '__main__':
     main()
