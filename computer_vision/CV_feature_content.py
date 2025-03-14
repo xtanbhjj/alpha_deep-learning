@@ -116,6 +116,11 @@ def main():
 
     styles_Y_gram = [gram(Y) for Y in styles_Y]
     init_img = init_img()
+    '''
+    1. Python调用init_img的__call__方法。
+    2. __call__方法内部调用init_img的forward()方法。
+    3. forward()方法返回self.weight,这个返回值被赋值给变量init_img。
+    '''
 
     for i in range(num_epochs):
         init_img = train(contents_Y, styles_Y_gram, device, loss, model, optimizer, init_img)
