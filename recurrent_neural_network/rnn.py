@@ -10,11 +10,11 @@ from torch import nn
 from torch.nn import functional as F
 
 class RNNModel(nn.Module):
-    def __init__(self, num_hiddens, vocab_size, **kwargs):
+    def __init__(self, layer, vocab_size, **kwargs):
         super(RNNModel, self).__init__(**kwargs)
-        self.rnn = nn.RNN(vocab_size, num_hiddens) 
+        self.rnn = layer
         self.vocab_size = vocab_size
-        self.num_hiddens = num_hiddens
+        self.num_hiddens = self.rnn.hidden_size
         if not self.rnn.bidirectional:
             self.num_directions = 1
             self.linear = nn.Linear(self.num_hiddens, self.vocab_size)
@@ -87,14 +87,21 @@ def inference(model, device, vocab, str):
 def main():
     # hyperparameters
     batch_size, num_steps = 32, 35
-    num_hiddens = 256
+    num_hiddens, num_layers = 256, 2
     num_epochs, lr = 500, 1
 
     #dataloader
     train_iter, vocab = load_data_time_machine(batch_size, num_steps)
 
+    #layer
+    rnn_layer = nn.RNN(input_size=len(vocab), hidden_size=num_hiddens)
+    gru_layer = nn.GRU(input_size=len(vocab), hidden_size=num_hiddens)
+    lstm_layer = nn.LSTM(input_size=len(vocab), hidden_size=num_hiddens) # bidirectional=True
+
+    layer = lstm_layer
+
     #model
-    model = RNNModel(num_hiddens, len(vocab))
+    model = RNNModel(layer, len(vocab))
     device = dlf.devices()[0]
     model.to(device)
     print(device)
