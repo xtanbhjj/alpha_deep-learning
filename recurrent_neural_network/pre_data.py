@@ -1,19 +1,30 @@
 import collections
 import re
+import os
 import sys
 import random
 import torch
+from torch.utils import data
 sys.path.append('../')
 from utils import dlf
 
 dlf.DATA_HUB['time_machine'] = (dlf.DATA_URL + 'timemachine.txt',
                      '090b5e7e70c295757f55df93cb0a180b9691891a')
 
+dlf.DATA_HUB['frg-eng'] = (dlf.DATA_URL + 'fra-eng.zip', 
+                        '94646ad1522d915e7b0f9296181140edcf86a4f5')
+
 def read_time_machine():
     """Load the time machine dataset into a list of text lines."""
     with open(dlf.download('time_machine'), 'r') as f:
         lines = f.readlines()
     return [re.sub('[^A-Za-z]+', ' ', line).strip().lower() for line in lines]
+
+def read_data_nmt():
+    """Load the dataset of the translation from Franch to English."""
+    data_dir = dlf.download_extract('frg-eng')
+    with open(os.path.join(data_dir, 'fra.txt'), 'r', encoding='utf-8') as f:
+        return f.read()
 
 def tokenize(lines, token='word'):
     """Split text lines into word or character tokens."""
@@ -23,6 +34,32 @@ def tokenize(lines, token='word'):
         return [list(line) for line in lines]
     else:
         raise ValueError('unknown token type: ' + token)
+
+def preprocess_nmt(text):
+    def no_space(char, pre_char):
+        return char in set(',.!?') and pre_char != ' '
+    text = text.replace('\u202f', ' ').replace('\xa0', ' ').lower()
+    out = [' ' + char if i > 0 and no_space(char, text[i - 1]) else char
+            for i, char in enumerate(text)]
+    return ''.join(out)
+
+def truncate_pad(line, num_steps, padding='<pad>'):
+    if len(line) > num_steps:
+        return line[:num_steps]
+    return line + [padding] * (num_steps - len(line))
+
+def tokenize_nmt(text, num_examples=None):
+    sourse, target = [], []
+    for i, line in enumerate(text.split('\n')):
+        if num_examples and i > num_examples:
+            break
+        parts = line.split('\t')
+        if len(parts) == 2:
+            sourse.append(parts[0].split(' '))
+            target.append(parts[1].split(' '))
+    
+    return sourse, target
+        
 
 class Vocab:
     """Vocabulary for text."""
@@ -87,6 +124,14 @@ def load_data(max_tokens=-1):
         corpus = corpus[:max_tokens]
     return corpus, vocab
 
+def bulid_array_nmt(lines, vocab, num_steps):
+    lines = [vocab[l] for l in lines]
+    lines = [l + [vocab['<eos>']] for l in lines]
+    array = torch.tensor([truncate_pad(l, num_steps, vocab['<pad>']) for l in lines])
+
+    valid_len = (array != vocab['<pad>']).type(torch.int32).sum(1)
+    return array, valid_len
+
 def seq_data_iter_random(corpus, batch_size, num_steps):
     '''先考虑num_steps, 有很多个序列之后, 再随机取, 每次取barch_size'''
     corpus = corpus[random.randint(0, num_steps - 1):]
@@ -133,15 +178,37 @@ class SeqDataLoader:
     def __iter__(self):
         return self.data_iter_fn(self.corpus, self.batch_size, self.num_steps)
 
+def load_array(data_arrays, batch_size, is_train=True):
+    """构造一个PyTorch数据迭代器"""
+    dataset = data.TensorDataset(*data_arrays)
+    return data.DataLoader(dataset, batch_size, shuffle=is_train)
+
 def load_data_time_machine(batch_size, num_steps, use_random_iter=False, max_tokens=10000):
     """Return the iterator and the vocabulary of the time machine dataset."""
     data_iter = SeqDataLoader(batch_size, num_steps, use_random_iter, max_tokens)
     return data_iter, data_iter.vocab
 
+def load_data_nmt(batch_size, num_steps, num_examples=600):
+    text = preprocess_nmt(read_data_nmt())
+    sourse, target = tokenize_nmt(text, num_examples)
+    sourse_data = [word for line in sourse for word in line]
+    target_data = [word for line in target for word in line]
+    src_vocab = Vocab(sourse_data, min_freq=2,
+                      reserved_tokens=['<pad>', '<bos>', '<eos>'])
+    tgt_vocab = Vocab(target_data, min_freq=2,
+                      reserved_tokens=['<pad>', '<bos>', '<eos>'])
+    src_array, src_valid_len = bulid_array_nmt(sourse, src_vocab, num_steps)
+    tgt_array, tgt_valid_len = bulid_array_nmt(target, tgt_vocab, num_steps)
+    data_arrays = (src_array, src_valid_len, tgt_array, tgt_valid_len)
+    data_iter = load_array(data_arrays, batch_size)
+    return data_iter, src_vocab, tgt_vocab
+
+
 def main():
-    train_iter, vocab = load_data_time_machine(32, 35)
-    for X, Y in train_iter:
-        print('X: ', X.shape, 'Y: ', Y.shape)
+    data_iter, src_vocab, tgt_vocab = load_data_nmt(batch_size=2, num_steps=8) 
+    for X, X_valid_len, Y, Y_valid_len in data_iter:
+        print('X:', X.type(torch.int32), '\n', X_valid_len, '\n',
+              'Y:', Y.type(torch.int32), '\n', Y_valid_len, '\n')
         break
 
 if __name__ == '__main__':
