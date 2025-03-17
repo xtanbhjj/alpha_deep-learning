@@ -1,17 +1,19 @@
-'''
-one-hot -> embedding
-encoder decoder
-"纯贪心搜索, softmax 取最大值(这里要求的是一个序列, 所以贪心不是最优的)"
-束搜索: 想当于每次不止考虑最优, 再多考虑一个次优
-'''
 import torch
 from torch import nn
 import sys
-from pre_data import *
+sys.path.append('../')
+from recurrent_neural_network.pre_data import *
+from attention.attention_utils import *
 from utils.accumulator import Accumulator
 from utils import dlf
-sys.path.append('../')
-
+import unittest
+from unittest.mock import patch
+from io import StringIO
+import torchinfo
+'''
+attention的使用
+重点在于如何分配QKV的角色
+'''
 class Encoder(nn.Module):
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers, dropout=0, **kwargs):
         super(Encoder, self).__init__(**kwargs)
@@ -27,24 +29,47 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers, dropout=0, **kwargs):
         super(Decoder, self).__init__(**kwargs)
+        self.attention = AdditiveAttention(key_size=num_hiddens, query_size=num_hiddens,
+                                         num_hiddens=num_hiddens, dropout=dropout)
         self.embedding = nn.Embedding(vocab_size, embed_size)
         self.rnn = nn.GRU(embed_size + num_hiddens, num_hiddens, num_layers, dropout=dropout)
         self.dense = nn.Linear(num_hiddens, vocab_size)
+        self._attention_weights = []
 
-    def init_state(self, enc_outputs, *args):
-        return enc_outputs[1]
+    def init_state(self, enc_outputs, encoder_valid_len):
+        output, hidden_state = enc_outputs
+        return (output.permute(1, 0, 2), hidden_state, encoder_valid_len)
 
     def forward(self, X, state):
-        embedded = self.embedding(X).permute(1, 0, 2)
-        # embedded = time batch embedding
-        # state[-1] = batch embedding
-        # print(embedded.shape)
-        context = state[-1].repeat(embedded.shape[0], 1, 1)
-        X = torch.cat((embedded, context), 2)
+        enc_outputs, hidden_state, enc_valid_len = state
+        '''
+        enc_outputs: (batch_size, num_steps, num_hiddens)
+        hidden_state: (num_layers, batch_size, num_hiddens)
+        enc_valid_len: (batch_size,)
+        '''
+        #print(enc_outputs.shape, hidden_state.shape, enc_valid_len.shape)
+        X = self.embedding(X).permute(1, 0, 2)
+        output, attention_weights = [], []
         #print(X.shape)
-        output, state = self.rnn(X, state)
-        output = self.dense(output).permute(1, 0, 2)
-        return output, state
+        
+        for x in X:
+            query = torch.unsqueeze(hidden_state[-1], dim=1)
+            '''
+            query: (batch_size, 1, num_hiddens)
+            '''
+            context = self.attention(query, enc_outputs, enc_outputs, enc_valid_len)
+            x = torch.cat((context, torch.unsqueeze(x, dim=1)), dim=-1)
+            #print(x.shape, context.shape)
+            out, hidden_state = self.rnn(x.permute(1, 0, 2), hidden_state)
+            output.append(out)
+            self.attention_weights.append(self.attention.attention_weights)
+        outpus = self.dense(torch.cat(output, dim=0))
+
+        return outpus.permute(1, 0, 2), [enc_outputs, hidden_state, enc_valid_len]
+    
+    @property
+    def attention_weights(self):
+        return self._attention_weights
 
 class Seq2Seq(nn.Module):
     def __init__(self, src_vocab_size, tgt_vocab_size, embed_size, num_hiddens, num_layers, dropout, **kwargs):
@@ -52,9 +77,9 @@ class Seq2Seq(nn.Module):
         self.encoder = Encoder(src_vocab_size, embed_size, num_hiddens, num_layers, dropout)
         self.decoder = Decoder(tgt_vocab_size, embed_size, num_hiddens, num_layers, dropout)
     
-    def forward(self, enc_X, dec_X, *args):
+    def forward(self, enc_X, dec_X, encoder_valid_len):
         enc_outputs = self.encoder(enc_X)
-        dec_state = self.decoder.init_state(enc_outputs)
+        dec_state = self.decoder.init_state(enc_outputs, encoder_valid_len)
         dec_output, dec_state = self.decoder(dec_X, dec_state)
         return dec_output, dec_state
 
@@ -107,7 +132,7 @@ def inference(model, device, src_vocab, tgt_vocab, num_steps, src_sentence, save
         dec_X = Y.argmax(dim=2)
         pred = dec_X.squeeze(dim=0).type(torch.int32).item()
         if save_attention_weights:
-            attention_weight_seq.append(net.decoder.attention_weights)
+            attention_weight_seq.append(model.decoder.attention_weights)
         if pred == tgt_vocab['<eos>']:
             break
         output_seq.append(pred)
@@ -133,7 +158,7 @@ def main():
     #hyperparameters
     embed_size, num_hiddens, num_layers, dropout = 32, 32, 2, 0.1
     batch_size, num_steps = 64, 10
-    lr, num_epochs = 0.005, 300
+    lr, num_epochs = 0.005, 10
     #dataloader
     train_iter, src_vocab, tgt_vocab = load_data_nmt(batch_size=batch_size, num_steps=num_steps)
     model = Seq2Seq(len(src_vocab), len(tgt_vocab), embed_size, num_hiddens, num_layers, dropout)
@@ -146,7 +171,7 @@ def main():
         l = train(model, optimizer, loss, device, train_iter, tgt_vocab)
         print(f'epoch: {epoch+1}, loss: {l:.2e}')
     src_sentence = "i lost ."
-    ans = inference(model, device, src_vocab, tgt_vocab, num_steps, src_sentence)
+    ans = inference(model, device, src_vocab, tgt_vocab, num_steps, src_sentence, True)
     print(ans[0])
 
 if __name__ == '__main__':

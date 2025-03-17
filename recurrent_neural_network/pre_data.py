@@ -203,7 +203,14 @@ def load_data_nmt(batch_size, num_steps, num_examples=600):
     data_iter = load_array(data_arrays, batch_size)
     return data_iter, src_vocab, tgt_vocab
 
-
+def sequence_mask(X, valid_len, value=0):
+    """在序列中屏蔽不相关的项"""
+    maxlen = X.size(1)
+    mask = torch.arange((maxlen), dtype=torch.float32,
+                        device=X.device)[None, :] < valid_len[:, None]
+    X[~mask] = value
+    return X
+    
 def main():
     data_iter, src_vocab, tgt_vocab = load_data_nmt(batch_size=2, num_steps=8) 
     for X, X_valid_len, Y, Y_valid_len in data_iter:
