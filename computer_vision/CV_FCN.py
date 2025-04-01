@@ -112,6 +112,7 @@ def train(model, optimizer, loss, device, train_iter):
     model.train()
     metric = Accumulator(2)
     for x, y in train_iter:
+        print(x.shape, y.shape)
         x = x.to(device)
         y = y.to(device)
         optimizer.zero_grad()
