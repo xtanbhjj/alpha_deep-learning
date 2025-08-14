@@ -243,6 +243,18 @@ def test(model, device, loss, val_loader,
 
     return val_loss, val_dice, val_acc
 
+def check():
+    ENCODER = "efficientnet-b3"
+    ENCODER_WEIGHTS = 'imagenet'
+    model = smp.PAN(
+        encoder_name=ENCODER,
+        encoder_weights=ENCODER_WEIGHTS,  # 可以选择使用预训练的权重
+        in_channels=3,               # 输入图像的通道数
+        classes=4                    # 输出的类别数 (4 种缺陷)
+    )
+    print(model)
+    exit()
+
 def main():
     #hyperparams
     batch_size, num_epochs, lr = 24, 0, 5e-4
@@ -278,8 +290,9 @@ def main():
         in_channels=3,               # 输入图像的通道数
         classes=4                    # 输出的类别数 (4 种缺陷)
     )
-    
-    path_256 = '/A432/zyz/kaggle/kaggle_severstal/save/pan-train1-256.pth'
+    print(model)
+    exit()
+    path_256 = './save/pan-eff.pth'
     checkpoint = torch.load(path_256, map_location=device)
     state_dict = checkpoint
     model.load_state_dict(state_dict)
